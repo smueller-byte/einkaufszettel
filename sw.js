@@ -1,5 +1,5 @@
 // Hält die App auch ohne Netz startbar. Die Daten puffert die App selbst auf dem Gerät.
-const CACHE = 'einkaufszettel-v1';
+const CACHE = 'einkaufszettel-v2';
 const SHELL = ['./', './index.html', './config.js', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
