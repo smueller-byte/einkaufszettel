@@ -708,10 +708,6 @@ function dueList(on){
   out.sort(function(a, b){ return (b.p.count || 0) - (a.p.count || 0) || b.ds / b.iv - a.ds / a.iv; });
   return out.slice(0, 6);
 }
-function watchOf(it){
-  if (Array.isArray(it.watch)) return storeList().map(function(s){ return s.id; }).filter(function(id){ return it.watch.indexOf(id) >= 0; });
-  return it.sid && S.stores[it.sid] ? [it.sid] : [];
-}
 function hasOfferPrice(it){ return !!(it.offer && typeof it.offer.price === 'number'); }
 /* An offer that starts later: shown greyed until its first day. */
 function isUpcoming(it){ return hasOfferPrice(it) && typeof it.offer.from === 'string' && it.offer.from > today(); }
@@ -845,18 +841,14 @@ function toggleDone(id){
 function toggleTag(id, tag){
   var it = S.list[id]; if (!it || (tag !== 'urgent' && tag !== 'offerOnly')) return;
   var n = clone(it); n[tag] = !it[tag];
-  if (tag === 'offerOnly' && n.offerOnly && !Array.isArray(n.watch)) n.watch = watchOf(it);
+  if (tag === 'offerOnly'){
+    delete n.watch;
+    if (n.offerOnly && !hasOfferPrice(n)) n.sid = null;
+    else if (!n.offerOnly && !n.sid){ var pr = primaryStore(S.catalog[it.pid] || {}); n.sid = pr ? pr.sid : null; }
+  }
   put('list', id, n);
 }
-function toggleWatch(id, sid, on){
-  var it = S.list[id]; if (!it || !S.stores[sid]) return;
-  var w = watchOf(it), has = w.indexOf(sid) >= 0;
-  if (on === true && has) return;
-  w = has ? w.filter(function(x){ return x !== sid; }) : w.concat([sid]);
-  var n = clone(it); n.watch = w;
-  if (w.length && w.indexOf(n.sid) < 0) n.sid = w[0];
-  put('list', id, n);
-}
+
 /* Store chosen inside the item sheet: keeps the tags. */
 function setStore(id, sid){
   var it = S.list[id]; if (!it) return;
@@ -872,7 +864,7 @@ function setStore(id, sid){
 /* Moving between list sections (drag or the move sheet). */
 function moveTo(id, target){
   var it = S.list[id]; if (!it) return;
-  if (target === 'deal'){ var n = clone(it); n.offerOnly = true; n.offer = null; if (!Array.isArray(n.watch)) n.watch = watchOf(it); put('list', id, n); return; }
+  if (target === 'deal'){ var n = clone(it); n.offerOnly = true; n.offer = null; n.sid = null; delete n.watch; put('list', id, n); return; }
   batch(function(){
     if (it.offerOnly){ var m = clone(it); m.offerOnly = false; put('list', id, m); }
     setStore(id, target === 'none' ? null : target);
@@ -1100,7 +1092,7 @@ function renderProducts(){
 function rowHtml(id, it, deal){
   var pi = priceInfo(it), qty = it.qty || 1, ch = cheaper(it), pills = [], price, sub = '';
   if (it.urgent) pills.push('<span class="pill urgent">' + ICON.bolt + 'Dringend</span>');
-  if (deal){ var ws = watchOf(it).map(function(sid){ return S.stores[sid].name; }); sub = '<span class="row-sub">' + esc(ws.length ? ws.join(' · ') : 'alle Geschäfte') + '</span>'; }
+  if (deal && it.sid && S.stores[it.sid]) sub = '<span class="row-sub">' + esc(S.stores[it.sid].name) + '</span>';
   if (ch) pills.push('<span class="pill good">' + esc(ch.name) + ' −' + fmt(ch.diff) + '</span>');
   var up = isUpcoming(it);
   if (up && pi.offer) pills.unshift('<span class="pill soon">' + ICON.clock + 'ab ' + esc(fmtDay(it.offer.from)) + '</span>');
@@ -1187,14 +1179,6 @@ function sheetItem(){
     stores.map(function(s){ return '<option value="' + s.id + '"' + (osel === s.id ? ' selected' : '') + '>' + esc(s.name) + '</option>'; }).join('') +
     '<option value=""' + (osel === '' ? ' selected' : '') + '>überall</option></select></div></div></div>' +
     (it.offer ? '<button class="link-btn" data-act="offer-clear">Angebot entfernen</button>' : '') + '</div>';
-  if (groupOf(it) === 'deal'){
-    var w = watchOf(it);
-    h += '<div class="field"><span class="label">Im Angebot bei</span><div class="chips">' +
-      stores.map(function(s){
-        var on = w.indexOf(s.id) >= 0;
-        return '<button class="chip' + (on ? ' sel' : '') + '" data-key="w-' + s.id + '" data-act="watch" data-sid="' + s.id + '" aria-pressed="' + on + '"><span class="chip-ck">' + ICON.checkS + '</span><span class="chip-t">' + esc(s.name) + '</span></button>';
-      }).join('') + newStoreChip() + '</div></div>';
-  } else {
   h += '<div class="field"><span class="label">Geschäft</span><div class="chips">' +
     stores.map(function(s){
       var pr = priceAt(p, s.id);
@@ -1206,7 +1190,6 @@ function sheetItem(){
   if (ch) h += '<div class="hint good"><span>Bei ' + esc(ch.name) + ' ' + fmt(ch.diff) + ' günstiger</span><button data-act="setstore" data-sid="' + ch.sid + '">Wechseln</button></div>';
   if (pi.elsewhere) h += '<div class="hint off"><span>Angebot gilt bei ' + esc(pi.elsewhere.name) + '</span><button data-act="setstore" data-sid="' + pi.elsewhere.sid + '">Wechseln</button></div>';
   h += '</div>';
-  }
   h += '<div class="sheet-actions"><button class="btn danger" data-act="remove" data-id="' + id + '">Entfernen</button>' +
     (p ? '<button class="btn" data-act="prod" data-pid="' + it.pid + '">Produkt bearbeiten</button>' : '') + '</div>';
   return h;
@@ -1424,7 +1407,7 @@ function commitNewStore(){
   if (!name){ renderSheet(); return; }
   batch(function(){
     var sid = addStore(name); if (!sid) return;
-    if (sh.type === 'item'){ var si = S.list[sh.id]; if (si && groupOf(si) === 'deal') toggleWatch(sh.id, sid, true); else setStore(sh.id, sid); }
+    if (sh.type === 'item') setStore(sh.id, sid);
     else if (sh.type === 'prod'){ var p = S.catalog[sh.pid]; if (p && !(p.stores && p.stores[sid])) toggleProdStore(sh.pid, sid); }
     dirty = true;
   });
@@ -1491,7 +1474,6 @@ document.addEventListener('click', function(e){
     case 'dec': changeQty(id, -1); break;
     case 'qty': if (ui.sheet){ it = S.list[ui.sheet.id]; if (it && !((it.qty || 1) <= 1 && el.getAttribute('data-d') === '-1')) changeQty(ui.sheet.id, Number(el.getAttribute('data-d'))); } break;
     case 'tag': toggleTag(id, el.getAttribute('data-tag')); break;
-    case 'watch': if (ui.sheet) toggleWatch(ui.sheet.id, sid); break;
     case 'edit': if (id && S.list[id]) openSheet({type:'item', id:id}); break;
     case 'prod': pid = el.getAttribute('data-pid'); if (S.catalog[pid]) openSheet({type:'prod', pid:pid}); break;
     case 'padd': if (ui.sheet && ui.sheet.pid){ addToList(ui.sheet.pid); toast('Auf den Zettel gesetzt'); } break;
